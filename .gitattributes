@@ -1,0 +1,4 @@
+# this drop notebooks from GitHub language stats
+*.ipynb linguist-vendored
+weights/yolov5x.pt filter=lfs diff=lfs merge=lfs -text
+weights/yolov5x-seg.pt filter=lfs diff=lfs merge=lfs -text
