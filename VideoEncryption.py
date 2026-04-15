@@ -19,7 +19,8 @@ def get_frames(frame_path, track_detect):
     cap = cv2.VideoCapture(frame_path)
     all_frames = cap.get(7)
     if all_frames < 4:
-        return None, None
+        cap.release()
+        return None, None, None
     frame = 1
     image = None
     track = None
@@ -28,11 +29,10 @@ def get_frames(frame_path, track_detect):
     while True:
         # try:
         ret, im = cap.read()
-        key = ProcessingKey(cv2whc(im))
-        print(frame)
-
         if ret is False or im is None:
             break
+        key = ProcessingKey(cv2whc(im))
+        print(frame)
         if frame > 1:
             break
 
@@ -41,6 +41,7 @@ def get_frames(frame_path, track_detect):
         track = result['tracker']
         frame += 1
 
+    cap.release()
     return image, track, key
 
 def encryption_video_with_(track_detect, label_id, frame_path, frame_status):
@@ -85,6 +86,10 @@ def encryption_video_with_(track_detect, label_id, frame_path, frame_status):
 
     finally:
         cap.release()
-        videoWriter.release()
-        cv2.destroyAllWindows()
+        if videoWriter is not None:
+            videoWriter.release()
+        try:
+            cv2.destroyAllWindows()
+        except cv2.error:
+            pass
 

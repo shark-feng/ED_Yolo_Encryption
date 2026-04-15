@@ -121,7 +121,13 @@ class Detector(baseDet):
         img = letterbox(img, new_shape=self.img_size)[0]
         img = img[:, :, ::-1].transpose(2, 0, 1)
         img = np.ascontiguousarray(img)
-        img = torch.from_numpy(img).to(self.device)
+        try:
+            img = torch.from_numpy(img).to(self.device)
+        except RuntimeError as err:
+            # 兼容部分环境中 Torch-NumPy 桥接不可用（"Numpy is not available"）
+            if "Numpy is not available" not in str(err):
+                raise
+            img = torch.tensor(img.tolist(), device=self.device)
         img = img.half()  # if self.m.fp16 else img.float()  # uint8 to fp16/32
         img /= 255.0  # 图像归一化
         if img.ndimension() == 3:

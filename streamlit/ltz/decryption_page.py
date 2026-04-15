@@ -4,6 +4,8 @@ import sys
 import numpy as np
 import streamlit as st
 from PIL import Image
+import re
+import io
 
 
 from pathlib import Path
@@ -32,6 +34,28 @@ from DetectUtils import *
 from VideoEncryption import *
 from copy import deepcopy
 
+
+def parse_key_input(raw_key: str):
+    if not raw_key:
+        return []
+    # 兼容空格、逗号、中文逗号等分隔格式
+    nums = re.findall(r"\d+", raw_key)
+    return [int(x) for x in nums]
+
+
+def get_persisted_upload(uploader_key, cache_key, label, file_types):
+    uploaded = st.file_uploader(label=label, type=file_types, key=uploader_key)
+    if uploaded is not None:
+        st.session_state[cache_key] = {
+            "name": uploaded.name,
+            "bytes": uploaded.getvalue(),
+        }
+    cached = st.session_state.get(cache_key)
+    if not cached:
+        return None, None
+    return io.BytesIO(cached["bytes"]), cached["name"]
+
+
 def numpy_array_to_video(numpy_array, video_out_path):
     video_height = numpy_array.shape[1]
     video_width = numpy_array.shape[2]
@@ -45,13 +69,18 @@ def numpy_array_to_video(numpy_array, video_out_path):
 
     video_write_capture.release()
 
-def app():
-    option = st.sidebar.selectbox(
+def app(selected_mode=None):
+    option = selected_mode or st.sidebar.selectbox(
         '请选择解密的模式',
         ('图像解密', '视频解密'))
     if option == '图像解密':
         st.header('欢迎来到解密模块')
-        img_file = st.file_uploader(label='上传一张需要解密的图片', type=['png', 'jpg'])
+        img_file, _ = get_persisted_upload(
+            uploader_key="decrypt_image_uploader",
+            cache_key="decrypt_image_file_cache",
+            label='上传一张需要解密的图片',
+            file_types=['png', 'jpg']
+        )
         placeholder = st.empty()
         with placeholder.container():
             with st.container():
@@ -72,8 +101,7 @@ def app():
                 placeholder='请输入提取码',
             )
             img = Image.open('data/images/imgdencry.png')
-            key_list = str.split(key, ' ')
-            key_list = [int(val) for val in key_list if val != ' ' and val != '']
+            key_list = parse_key_input(key)
             print(key_list)
             with st.container():
                 contact_form_left, contact_form_right = st.columns((1, 1), gap='small')
@@ -83,15 +111,22 @@ def app():
             with contact_form_right:
                 st.subheader('解密图像')
                 if len(key_list) == 4:
-                    img = Decryption_img(r'data/images/imgdencry.png', key_list)
-                    st.image(img)
-                    with open('data/images/imgdencry.png', 'rb') as file:
-                        btn = st.download_button(
-                            label='下载加密后的图像',
-                            data=file,
-                            file_name='DencryImg.png',
-                            mime="image/png"
-                        )
+                    try:
+                        img = Decryption_img(r'data/images/imgdencry.png', key_list)
+                        st.image(img)
+                        decrypted_img_path = 'data/images/imgdecrypt_result.png'
+                        Image.fromarray(img).save(decrypted_img_path)
+                        with open(decrypted_img_path, 'rb') as file:
+                            btn = st.download_button(
+                                label='下载解密后的图像',
+                                data=file,
+                                file_name='Decryption_image.png',
+                                mime="image/png"
+                            )
+                    except Exception:
+                        st.error('解密失败：提取码不正确或图片不是系统生成的加密图像。')
+                elif len(key_list) > 0:
+                    st.warning('提取码应包含 4 个整数，例如：22 27 68 163')
                 else:
                     pass
 
@@ -100,7 +135,12 @@ def app():
         # 此处将字节流处理成视频格式 具体参考
         # https://stackoverflow.com/questions/60558412/how-to-decode-a-video-memory-file-byte-string-and-step-through-it-frame-by-f
         # pip install imageio[ffmpeg]
-        uploaded_file = st.file_uploader("上传一个加密视频", type=["mp4", "avi"], accept_multiple_files=False)
+        uploaded_file, _ = get_persisted_upload(
+            uploader_key="decrypt_video_uploader",
+            cache_key="decrypt_video_file_cache",
+            label="上传一个加密视频",
+            file_types=["mp4", "avi"]
+        )
         placeholder = st.empty()
         with placeholder.container():
             with st.container():
@@ -117,13 +157,12 @@ def app():
                 '输入图片提取码 👇 ',
                 placeholder='请输入提取码',
             )
-            key_list = str.split(key, ' ')
-            key_list = [int(val) for val in key_list if val != ' ' and val != '']
+            key_list = parse_key_input(key)
 
             placeholder.empty()
             with st.container():
                 contact_form_left, contact_form_right = st.columns((2, 2), gap='medium')
-                bytes_data = uploaded_file.read()
+                bytes_data = uploaded_file.getvalue()
                 frames = iio.imread(bytes_data, index=None)
                 frames = np.array(frames)
 

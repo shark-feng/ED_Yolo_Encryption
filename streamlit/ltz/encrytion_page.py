@@ -2,6 +2,8 @@ import os
 import sys
 import cv2
 import imageio.v3 as iio
+import tempfile
+import io
 from pathlib import Path
 
 FILE = Path(__file__).resolve()
@@ -52,9 +54,23 @@ frame_img = None
 tracks_process = None
 name_id_dict = None
 
-def app():
 
-    option = st.sidebar.selectbox(
+def get_persisted_upload(uploader_key, cache_key, label, file_types):
+    uploaded = st.file_uploader(label=label, type=file_types, key=uploader_key)
+    if uploaded is not None:
+        st.session_state[cache_key] = {
+            "name": uploaded.name,
+            "bytes": uploaded.getvalue(),
+        }
+    cached = st.session_state.get(cache_key)
+    if not cached:
+        return None, None
+    return io.BytesIO(cached["bytes"]), cached["name"]
+
+
+def app(selected_mode=None):
+
+    option = selected_mode or st.sidebar.selectbox(
         '请选择加密的模式',
         # ('全图加密', '选择性加密', '基于目标检测加密', '基于实例分割加密'))
         ('自定义加密', '基于实例分割加密', '视频分割'))
@@ -95,7 +111,12 @@ def app():
 
     elif option == '自定义加密':
         st.header("自定义加密模式")
-        img_file = st.file_uploader(label='上传一张需要加密图像', type=['png', 'jpg'])
+        img_file, _ = get_persisted_upload(
+            uploader_key="encrypt_custom_uploader",
+            cache_key="encrypt_custom_file_cache",
+            label='上传一张需要加密图像',
+            file_types=['png', 'jpg']
+        )
         placeholder = st.empty()
         with placeholder.container():
             with st.container():
@@ -245,7 +266,12 @@ def app():
 
     elif option == '基于实例分割加密':
         st.header('基于实例分割的图像加密模式')
-        img_file = st.file_uploader(label='上传一张需要加密图像', type=['png', 'jpg'])
+        img_file, _ = get_persisted_upload(
+            uploader_key="encrypt_segment_uploader",
+            cache_key="encrypt_segment_file_cache",
+            label='上传一张需要加密图像',
+            file_types=['png', 'jpg']
+        )
         placeholder = st.empty()
         with placeholder.container():
             with st.container():
@@ -310,14 +336,14 @@ def app():
                             DirectEncryption(fusion_image, xyxy, key, mask, name)
                         encryption_object.append([encryption_image, xyxy, mask])
                     im0 = annotator.result()
-                    st.image(im0, use_column_width='always', width=850)
+                    st.image(im0, width=850)
 
 
             with contact_form_right:
                 st.subheader('加密后的图像')
                 st.write('##')
                 st.write('图像提取码: ', str(key[0]), str(key[1]), str(key[2]), str(key[3]))
-                st.image(PIL2whc(fusion_image), use_column_width='always')
+                st.image(PIL2whc(fusion_image), width='stretch')
                 Image.fromarray(PIL2whc(fusion_image)).save('data/images/segment_encryImg.png')
                 # 写入加密需要的信息
                 SetEncryptionImage('data/images/segment_encryImg.png', encryption_object, 'segment', fusion_image,
@@ -336,7 +362,12 @@ def app():
         # 此处将字节流处理成视频格式 具体参考
         # https://stackoverflow.com/questions/60558412/how-to-decode-a-video-memory-file-byte-string-and-step-through-it-frame-by-f
         # pip install imageio[ffmpeg]
-        uploaded_file = st.file_uploader("Choose a file", type=["mp4", "avi"], accept_multiple_files=False)
+        uploaded_file, uploaded_name = get_persisted_upload(
+            uploader_key="encrypt_video_uploader",
+            cache_key="encrypt_video_file_cache",
+            label="Choose a file",
+            file_types=["mp4", "avi"]
+        )
         placeholder = st.empty()
         with placeholder.container():
             with st.container():
@@ -351,14 +382,60 @@ def app():
             placeholder.empty()
             with st.container():
                 contact_form_left, contact_form_right = st.columns((2, 2), gap='medium')
-                bytes_data = uploaded_file.read()
-                frames = iio.imread(bytes_data, index=None)
-                frames = np.array(frames)
-
                 global repeat_process, frame_img, tracks_process, name_id_dict
-                # tracks_process.tracks.clear()
-                numpy_array_to_video(np.ascontiguousarray(frames[:, :, :, ::-1]), 'data/videos/Encryoutputvideo.mp4')
+                # imageio 在部分环境中无法直接从 bytes 解码视频，改为先落地临时文件再用 OpenCV 转码
+                upload_suffix = Path(uploaded_name or "uploaded.mp4").suffix or '.mp4'
+                with tempfile.NamedTemporaryFile(delete=False, suffix=upload_suffix) as tmp_file:
+                    tmp_file.write(uploaded_file.getvalue())
+                    tmp_input_path = tmp_file.name
+
+                cap_uploaded = cv2.VideoCapture(tmp_input_path)
+                if not cap_uploaded.isOpened():
+                    st.error('上传视频读取失败，请检查视频格式（推荐 mp4/avi）后重试。')
+                    try:
+                        os.remove(tmp_input_path)
+                    except OSError:
+                        pass
+                    return
+
+                os.makedirs('data/videos', exist_ok=True)
+                output_path = 'data/videos/Encryoutputvideo.mp4'
+                fps_uploaded = cap_uploaded.get(cv2.CAP_PROP_FPS)
+                if fps_uploaded <= 0:
+                    fps_uploaded = 25
+
+                transcode_writer = None
+                try:
+                    while True:
+                        ret_uploaded, frame_uploaded = cap_uploaded.read()
+                        if not ret_uploaded or frame_uploaded is None:
+                            break
+
+                        if transcode_writer is None:
+                            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                            transcode_writer = cv2.VideoWriter(
+                                output_path, fourcc, fps_uploaded,
+                                (frame_uploaded.shape[1], frame_uploaded.shape[0])
+                            )
+
+                        transcode_writer.write(frame_uploaded)
+                finally:
+                    cap_uploaded.release()
+                    if transcode_writer is not None:
+                        transcode_writer.release()
+                    try:
+                        os.remove(tmp_input_path)
+                    except OSError:
+                        pass
+
+                if not os.path.exists(output_path):
+                    st.error('视频预处理失败，请更换视频后重试。')
+                    return
+
                 frame_img, tracks, key = get_frames('data/videos/Encryoutputvideo.mp4', track_detect)
+                if frame_img is None or tracks is None:
+                    st.error('无法从视频中提取有效帧，请使用时长更长或编码更标准的视频后重试。')
+                    return
                 tracks_process = deepcopy(tracks)
                 name_id_dict = {'{}: {}'.format(t.track_id, t.cls_): t.track_id for t in tracks_process.tracks}
                 with contact_form_left:
@@ -416,8 +493,13 @@ def app():
 
                             finally:
                                 cap.release()
-                                videoWriter.release()
-                                cv2.destroyAllWindows()
+                                if videoWriter is not None:
+                                    videoWriter.release()
+                                # Streamlit/无GUI环境下调用会报 highgui not implemented
+                                try:
+                                    cv2.destroyAllWindows()
+                                except cv2.error:
+                                    pass
                         st.success('已完成，请点击按钮下载!')
                         st.balloons()
                         st.video(r'data/videos/encryption_output.mp4')
