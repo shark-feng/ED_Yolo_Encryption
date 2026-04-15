@@ -1,7 +1,0 @@
-[theme]
-base="light"   # 基础模式，Streamlit 会优先使用此模式，但可通过 CSS 覆盖
-primaryColor="#2c3e50"
-backgroundColor="#ffffff"
-secondaryBackgroundColor="#f0f2f6"
-textColor="#262730"
-font="sans serif"
