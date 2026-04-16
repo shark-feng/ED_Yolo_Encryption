@@ -1,13 +1,13 @@
-# ED_YoloV5.1
+# ED_YoloV11.1
 
-基于 YOLOv5、实例分割与 DeepSort 的区域加密项目。  
+基于 YOLOv11、实例分割与 DeepSort 的区域加密项目。  
 项目支持 **图像加密/解密** 与 **视频目标跟踪加密**，适合对隐私区域（如人脸、行人、车辆等）进行选择性保护，而非整图加密。
 
 ## 项目特性
 
 - 支持手动框选区域加密（自定义 ROI）
 - 支持基于实例分割的图像加密
-- 支持视频目标跟踪加密（YOLOv5 + DeepSort）
+- 支持视频目标跟踪加密（YOLOv11 + DeepSort）
 - 支持按提取码恢复图像（无损还原流程）
 - 提供 Streamlit 可视化界面，便于演示和测试
 
@@ -15,9 +15,9 @@
 
 建议环境（实测更稳）：
 
-- Python 3.8 / 3.9
+- Python 3.10
 - Windows 10/11
-- CUDA 11.x（如需 GPU 推理）
+- CUDA 11.8+（如需 GPU 推理）
 
 安装依赖：
 
@@ -27,14 +27,14 @@ pip install -r requirements.txt
 
 ## 模型与权重准备
 
-请确保以下权重文件存在（路径按项目代码默认配置）：
+请确保以下权重文件可用（默认会由 Ultralytics 自动下载到当前工作目录）：
 
-- `weights/yolov5x.pt`（目标检测）
-- `weights/yolov5x-seg.pt`（实例分割）
+- `yolo11x.pt`（目标检测）
+- `yolo11x-seg.pt`（实例分割）
 - `deep_sort/deep_sort/deep/checkpoint/ckpt.t7`（DeepSort ReID）
 
 DeepSort 配置文件位于：`data/deep_sort.yaml`。  
-如需替换模型，请同步修改对应脚本中的权重路径。
+如需替换模型，请同步修改对应脚本中的权重文件名（例如 `yolo11n-seg.pt`、`yolo11s-seg.pt`）。
 
 ## 快速开始
 
@@ -82,7 +82,7 @@ streamlit run streamlit/app.py
 │   └── ltz/                      # 功能页面
 ├── Encryption/                   # 加解密算法实现
 ├── DetectUtils.py                # 检测/分割与加解密流程封装
-├── AutoDetector.py               # YOLOv5 + DeepSort 检测追踪器
+├── AutoDetector.py               # YOLOv11 + DeepSort 检测追踪器
 ├── VideoEncryption.py            # 视频帧处理与加密流程
 ├── data/                         # 数据与配置（含 deep_sort.yaml）
 ├── weights/                      # 模型权重目录（需自行准备）
@@ -93,10 +93,10 @@ streamlit run streamlit/app.py
 
 ### 1. 启动后提示找不到权重文件
 
-检查权重是否放在默认路径，尤其是：
+检查权重文件是否可访问，尤其是：
 
-- `weights/yolov5x.pt`
-- `weights/yolov5x-seg.pt`
+- `yolo11x.pt`
+- `yolo11x-seg.pt`
 - `deep_sort/deep_sort/deep/checkpoint/ckpt.t7`
 
 ### 2. GPU 可用但速度仍慢
@@ -112,7 +112,7 @@ streamlit run streamlit/app.py
 
 ## 说明
 
-本项目基于 YOLOv5 做了工程化改造，用于选择性区域保护与可恢复解密。  
+本项目基于 YOLOv11 做了工程化改造，用于选择性区域保护与可恢复解密。  
 如果你计划用于生产场景，建议补充：
 
 - 更严格的密钥管理机制

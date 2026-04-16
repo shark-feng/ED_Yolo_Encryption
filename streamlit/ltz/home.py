@@ -24,7 +24,7 @@ def app():
                         <div id="banner">
                           <div class="banner-content">
                             <h1>智能影像加密系统</h1>
-                            <p>基于 YOLOv5 + DeepSort 的全流程安全防护方案</p>
+                            <p>基于 YOLOv11 + DeepSort 的全流程安全防护方案</p>
                           </div>
                         </div>
                 """

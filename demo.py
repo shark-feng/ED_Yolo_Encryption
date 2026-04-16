@@ -5,6 +5,13 @@ import imutils
 
 from AutoDetector import Detector
 
+def create_video_writer(output_path, fps, frame_size):
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    writer = cv2.VideoWriter(output_path, fourcc, fps, frame_size)
+    if not writer.isOpened():
+        raise RuntimeError(f'无法创建视频写入器: {output_path}')
+    return writer
+
 
 def main():
     cap = None  # 给cap初始值，避免异常时未赋值
@@ -12,8 +19,8 @@ def main():
         name = 'demo'
         start = 0  # 给初始值，避免异常时未赋值
         det = Detector()
-        det.init_model(weight='weights/yolov5x-seg.pt', detect_type='segment')
-        # det.init_model(weight='weights/yolov5s.pt', detect_type='object')
+        det.init_model(weight='yolo11x-seg.pt', detect_type='segment')
+        # det.init_model(weight='yolo11x.pt', detect_type='object')
 
         cap = cv2.VideoCapture(r'C:\Users\admin\Desktop\test.mp4')
         fps = int(cap.get(5))  # 获取视频帧率
@@ -38,10 +45,9 @@ def main():
             result = result['frame']
             result = imutils.resize(result, height=500)
             if videoWriter is None:
-                fourcc = cv2.VideoWriter_fourcc(
-                    'U', '2', '6', '5')  # opencv3.0
-                videoWriter = cv2.VideoWriter(
-                    'result.mp4', fourcc, fps, (result.shape[1], result.shape[0]))
+                videoWriter = create_video_writer(
+                    'result.mp4', fps, (result.shape[1], result.shape[0])
+                )
 
             end = time.time()
             print('total time: ', end - inner_start)

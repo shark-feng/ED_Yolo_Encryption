@@ -6,6 +6,7 @@ import streamlit as st
 from PIL import Image
 import re
 import io
+import tempfile
 
 
 from pathlib import Path
@@ -21,7 +22,6 @@ from DetectUtils import *
 import os
 import sys
 import cv2
-import imageio.v3 as iio
 from pathlib import Path
 
 import time
@@ -61,7 +61,7 @@ def numpy_array_to_video(numpy_array, video_out_path):
     video_width = numpy_array.shape[2]
 
     out_video_size = (video_width, video_height)
-    output_video_fourcc = int(cv2.VideoWriter_fourcc('U', '2', '6', '3'))
+    output_video_fourcc = int(cv2.VideoWriter_fourcc(*'mp4v'))
     video_write_capture = cv2.VideoWriter(video_out_path, output_video_fourcc, 30, out_video_size)
 
     for frame in numpy_array:
@@ -135,11 +135,11 @@ def app(selected_mode=None):
         # 此处将字节流处理成视频格式 具体参考
         # https://stackoverflow.com/questions/60558412/how-to-decode-a-video-memory-file-byte-string-and-step-through-it-frame-by-f
         # pip install imageio[ffmpeg]
-        uploaded_file, _ = get_persisted_upload(
+        uploaded_file, uploaded_name = get_persisted_upload(
             uploader_key="decrypt_video_uploader",
             cache_key="decrypt_video_file_cache",
-            label="上传一个加密视频",
-            file_types=["mp4", "avi"]
+            label="上传一个加密视频包",
+            file_types=["zip", "mp4", "avi"]
         )
         placeholder = st.empty()
         with placeholder.container():
@@ -154,7 +154,7 @@ def app(selected_mode=None):
 
         if uploaded_file:
             key = st.text_input(
-                '输入图片提取码 👇 ',
+                '输入视频提取码 👇 ',
                 placeholder='请输入提取码',
             )
             key_list = parse_key_input(key)
@@ -162,44 +162,52 @@ def app(selected_mode=None):
             placeholder.empty()
             with st.container():
                 contact_form_left, contact_form_right = st.columns((2, 2), gap='medium')
-                bytes_data = uploaded_file.getvalue()
-                frames = iio.imread(bytes_data, index=None)
-                frames = np.array(frames)
-
-
                 with contact_form_left:
                     st.subheader('加密视频')
-                    numpy_array_to_video(np.ascontiguousarray(frames[:, :, :, ::-1]), 'data/videos/Decrypoutputvideo.mp4')
-                    st.video(r'data/videos/Decrypoutputvideo.mp4')
+                    if uploaded_name and uploaded_name.lower().endswith('.zip'):
+                        st.info('已上传可解密加密包。')
+                    else:
+                        st.warning('当前仅支持解密带元数据的加密包，建议上传 zip 加密包。')
                 #  获取选择的物体
                 with contact_form_right:
                     st.subheader('解密后的视频')
-                    if (len(key_list) == 4):
-                        time.sleep(2)
-                        placeholder1 = st.empty()
-                        my_bar = placeholder1.progress(0)
-                        with st.spinner('正在处理中，请稍等...'):
-                            time_index = 0
-                            while True:
-                                my_bar.progress(time_index / 100)
-                                time.sleep(0.1)
-                                time_index += 1
-                                if time_index > 100:
-                                    break
-                            placeholder1.success('已完成，请点击按钮下载!')
-                            placeholder1.empty()
-
-                            if key_list == [30, 19, 76, 218]:
-                                st.video(r'data/videos/Encryoutputvideo.mp4')
-                            else:
-                                st.video(r'data/videos/Decrypoutputvideo.mp4')
-                            with open('data/videos/outputvideo.mp4', 'rb') as file:
-                                btn = st.download_button(
-                                    label='下载加密后的图像',
-                                    data=file,
-                                    file_name='Encrytion_video.mp4',
-                                    mime="video/mp4"
-                                )
+                    if len(key_list) == 4:
+                        if not uploaded_name or not uploaded_name.lower().endswith('.zip'):
+                            st.error('请上传加密包 zip 文件进行视频解密。')
+                        else:
+                            extract_dir = tempfile.mkdtemp(prefix='video_pkg_')
+                            package_path = os.path.join(extract_dir, uploaded_name)
+                            with open(package_path, 'wb') as f:
+                                f.write(uploaded_file.getvalue())
+                            progress = st.empty()
+                            frame_status = [0, 1]
+                            try:
+                                with st.spinner('正在处理中，请稍等...'):
+                                    encrypted_video_path, meta = load_video_package(package_path, extract_dir)
+                                    if list(meta.get('key', [])) != key_list:
+                                        st.error('提取码不正确，无法解密该视频。')
+                                        return
+                                    frame_status[1] = max(meta.get('frame_count', 1), 1)
+                                    output_path = 'data/videos/decryption_output.mp4'
+                                    progress_bar = progress.progress(0)
+                                    decrypt_video_with_metadata(encrypted_video_path, output_path, meta, frame_status)
+                                    progress_bar.progress(1.0)
+                                st.success('已完成，请点击按钮下载!')
+                                progress.empty()
+                                st.video(output_path)
+                                with open(output_path, 'rb') as file:
+                                    st.download_button(
+                                        label='下载解密后的视频',
+                                        data=file,
+                                        file_name='Decryption_video.mp4',
+                                        mime="video/mp4"
+                                    )
+                            finally:
+                                try:
+                                    import shutil
+                                    shutil.rmtree(extract_dir, ignore_errors=True)
+                                except OSError:
+                                    pass
 
 
 

@@ -1,9 +1,9 @@
 import os
 import sys
 import cv2
-import imageio.v3 as iio
 import tempfile
 import io
+import shutil
 from pathlib import Path
 
 FILE = Path(__file__).resolve()
@@ -26,14 +26,43 @@ from copy import deepcopy
 
 # st.set_option('deprecation.showfileUploaderEncoding', False)
 
-model_detect, model_segment, track_detect = None, None, None
-if model_detect is None:
-    model_detect = initYOLOModel('object')
-if model_segment is None:
-    model_segment = initYOLOModel('segment')
-if track_detect is None:
-    track_detect = Detector()
-    track_detect.init_model()
+MODEL_SCALE_OPTIONS = ("n", "s", "m", "l", "x")
+
+
+def _weight_name(scale: str, task: str):
+    if task == 'segment':
+        return f'yolo11{scale}-seg.pt'
+    return f'yolo11{scale}.pt'
+
+
+def _ensure_runtime_models(scale: str):
+    object_weight = _weight_name(scale, 'object')
+    segment_weight = _weight_name(scale, 'segment')
+    current_profile = st.session_state.get("model_profile")
+
+    if current_profile != scale:
+        st.session_state.model_detect = initYOLOModel('object', object_weight)
+        st.session_state.model_segment = initYOLOModel('segment', segment_weight)
+        detector = Detector()
+        detector.init_model(weight=segment_weight, detect_type='segment')
+        st.session_state.track_detect = detector
+        st.session_state.model_profile = scale
+
+    return (
+        st.session_state.model_detect,
+        st.session_state.model_segment,
+        st.session_state.track_detect,
+        object_weight,
+        segment_weight
+    )
+
+
+def create_video_writer(output_path, fps, frame_size):
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    writer = cv2.VideoWriter(output_path, fourcc, fps, frame_size)
+    if not writer.isOpened():
+        raise RuntimeError(f'无法创建视频写入器: {output_path}')
+    return writer
 
 
 def numpy_array_to_video(numpy_array, video_out_path):
@@ -69,6 +98,21 @@ def get_persisted_upload(uploader_key, cache_key, label, file_types):
 
 
 def app(selected_mode=None):
+    active_scale = st.session_state.get("model_profile", "x")
+    if active_scale not in MODEL_SCALE_OPTIONS:
+        active_scale = "x"
+        st.session_state.model_profile = active_scale
+    model_detect, model_segment, track_detect, object_weight, segment_weight = _ensure_runtime_models(active_scale)
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("模型状态")
+    st.sidebar.caption(f"检测权重: `{object_weight}`")
+    st.sidebar.caption(f"分割权重: `{segment_weight}`")
+    if st.sidebar.button("模型自检", use_container_width=True):
+        try:
+            info = model_segment.names if hasattr(model_segment, "names") else {}
+            st.sidebar.success(f"模型可用，类别数: {len(info)}")
+        except Exception as e:
+            st.sidebar.error(f"模型自检失败: {e}")
 
     option = selected_mode or st.sidebar.selectbox(
         '请选择加密的模式',
@@ -285,76 +329,108 @@ def app(selected_mode=None):
 
         if img_file:
             placeholder.empty()
-            with st.container():
-                contact_form_left, contact_form_right = st.columns((2, 2), gap='medium')
-                img = Image.open(img_file)
-                with contact_form_left:
-                    st.subheader('原图片')
-                    img.save('data/images/pendingImg.png')
+            cfg_left, cfg_right = st.columns((2, 2), gap='medium')
+            with cfg_left:
+                selected_scale = st.selectbox(
+                    "模型规格",
+                    MODEL_SCALE_OPTIONS,
+                    index=MODEL_SCALE_OPTIONS.index(st.session_state.get("model_profile", "x")),
+                    key="segment_model_scale_main",
+                    help="n/s/m/l/x 分别表示从轻量到高精度模型。"
+                )
+            if selected_scale != st.session_state.get("model_profile", "x"):
+                st.session_state.model_profile = selected_scale
+                st.rerun()
 
-                    img = np.ascontiguousarray(img)
-                    annotator = Annotator(img.copy(), line_width=2)
-                    key = ProcessingKey(img)
-                    print(key)
-                    result, notuse_value = runModel(model_segment, img, 'segment')
-                    # fusion_image = img
+            with cfg_right:
+                st.caption(f"检测权重: `{object_weight}`")
+                st.caption(f"分割权重: `{segment_weight}`")
+                with st.expander("参数说明", expanded=False):
+                    st.write(
+                        "- 模型规格：`n/s/m/l/x`，越靠后精度通常越高，但速度和显存占用也更高。\n"
+                        "- 检测权重：用于目标检测（边框）。\n"
+                        "- 分割权重：用于实例分割（像素级掩码）。\n"
+                        "- 建议：实时场景优先 `n/s`，离线高质量处理优先 `l/x`。"
+                    )
 
-                    multiselect = st.multiselect('你需要加密的类别',
-                                                         [str(i) + ': ' + model_segment.names[int(v)] for i, v in
-                                                          enumerate(notuse_value[:, 5:6])])
-                    encryption_object = []
-                    fusion_image = PIL2whc(img)
-                    # if multiselect:
-                    #     print('0', multiselect)
-                    if len(result) == 0:
-                        fusion_image = noColorEncry(fusion_image, key)
+            img = Image.open(img_file)
+            img.save('data/images/pendingImg.png')
+            img_np = np.ascontiguousarray(img)
 
-                        # encryImg = Image.fromarray(np.transpose(EncryImg, (1, 0, 2)))
-                        encryImg = Image.fromarray(fusion_image)
-                        encryImg.save('data/images/segment_encryImg.png')
+            st.subheader('步骤 1：检测并选择需要加密的类别')
+            preview_left, preview_right = st.columns((2, 2), gap='medium')
+            with preview_left:
+                st.image(img_np, caption='原图', width=850)
 
+            with st.spinner('正在进行实例分割检测...'):
+                result, notuse_value = runModel(model_segment, img_np, 'segment')
+
+            options = [str(i) + ': ' + model_segment.names[int(v)] for i, v in enumerate(notuse_value[:, 5:6])] \
+                if len(result) > 0 else []
+            selected_targets = st.multiselect(
+                '选择要加密的目标（可多选）',
+                options,
+                help='先选择目标，再点击“开始加密”。'
+            )
+
+            annotator = Annotator(img_np.copy(), line_width=2)
+            for i, obj in enumerate(result):
+                xyxy, conf, cls, mask = obj
+                name = str(i) + ': ' + model_segment.names[int(cls)]
+                annotator.box_label(xyxy, name, color=colors(int(cls), True))
+            with preview_right:
+                st.image(annotator.result(), caption='检测预览', width=850)
+
+            st.subheader('步骤 2：执行加密')
+            run_encrypt = st.button('开始加密', type='primary', use_container_width=True)
+            if run_encrypt:
+                key = ProcessingKey(img_np)
+                encryption_object = []
+                fusion_image = PIL2whc(img_np)
+
+                if len(result) == 0:
+                    fusion_image = noColorEncry(fusion_image, key)
+                    encry_img = Image.fromarray(fusion_image)
+                    encry_img.save('data/images/segment_encryImg.png')
+                else:
                     # ------------
                     # 全局操作
                     stack.clear()
                     # ------------
-
-                    # 对于每个检测出来的物体
                     for i, obj in enumerate(result):
-                        # 解包内容
                         xyxy, conf, cls, mask = obj
                         name = str(i) + ': ' + model_segment.names[int(cls)]
-                        annotator.box_label(xyxy, name, color=colors(int(cls), True))
-
-                        if name not in multiselect:
+                        if name not in selected_targets:
                             continue
-                        # 重叠判定（若之前存在已加密的内容，则当前物体存在部分不需要加密）
                         is_overlap, overlap_areas = Overlap(xyxy, mask)
-                        encryption_image, mask, fusion_image = OverlapEncryption(fusion_image, xyxy, key,
-                                                                                 overlap_areas,
-                                                                                 mask, name) \
-                            if is_overlap else \
-                            DirectEncryption(fusion_image, xyxy, key, mask, name)
+                        encryption_image, mask, fusion_image = OverlapEncryption(
+                            fusion_image, xyxy, key, overlap_areas, mask, name
+                        ) if is_overlap else DirectEncryption(fusion_image, xyxy, key, mask, name)
                         encryption_object.append([encryption_image, xyxy, mask])
-                    im0 = annotator.result()
-                    st.image(im0, width=850)
 
-
-            with contact_form_right:
-                st.subheader('加密后的图像')
-                st.write('##')
-                st.write('图像提取码: ', str(key[0]), str(key[1]), str(key[2]), str(key[3]))
-                st.image(PIL2whc(fusion_image), width='stretch')
                 Image.fromarray(PIL2whc(fusion_image)).save('data/images/segment_encryImg.png')
-                # 写入加密需要的信息
-                SetEncryptionImage('data/images/segment_encryImg.png', encryption_object, 'segment', fusion_image,
-                                   key)
-                with open('data/images/segment_encryImg.png', 'rb') as file:
-                    btn = st.download_button(
-                        label='下载加密后的图像',
-                        data=file,
-                        file_name='SegEncrytion_image.png',
-                        mime="image/png"
-                    )
+                SetEncryptionImage(
+                    'data/images/segment_encryImg.png',
+                    encryption_object,
+                    'segment',
+                    fusion_image,
+                    key
+                )
+
+                result_left, result_right = st.columns((2, 2), gap='medium')
+                with result_left:
+                    st.subheader('加密结果')
+                    st.image(PIL2whc(fusion_image), width=850)
+                with result_right:
+                    st.subheader('下载与提取码')
+                    st.info(f"图像提取码: {key[0]} {key[1]} {key[2]} {key[3]}")
+                    with open('data/images/segment_encryImg.png', 'rb') as file:
+                        st.download_button(
+                            label='下载加密后的图像',
+                            data=file,
+                            file_name='SegEncrytion_image.png',
+                            mime="image/png"
+                        )
 
 
     elif option == '视频分割':
@@ -380,6 +456,28 @@ def app(selected_mode=None):
                     st.image('data/images/ciphervideo.png', width=500)
         if uploaded_file:
             placeholder.empty()
+            cfg_left, cfg_right = st.columns((2, 2), gap='medium')
+            with cfg_left:
+                selected_scale = st.selectbox(
+                    "模型规格",
+                    MODEL_SCALE_OPTIONS,
+                    index=MODEL_SCALE_OPTIONS.index(st.session_state.get("model_profile", "x")),
+                    key="video_model_scale_main",
+                    help="视频场景建议优先 n/s，兼顾速度与效果。"
+                )
+            if selected_scale != st.session_state.get("model_profile", "x"):
+                st.session_state.model_profile = selected_scale
+                st.rerun()
+
+            with cfg_right:
+                st.caption(f"检测权重: `{object_weight}`")
+                st.caption(f"分割权重: `{segment_weight}`")
+                with st.expander("参数说明", expanded=False):
+                    st.write(
+                        "- 视频逐帧推理，模型越大处理耗时越高。\n"
+                        "- 先用 `n/s` 快速验证流程，再切 `l/x` 输出高质量结果。"
+                    )
+
             with st.container():
                 contact_form_left, contact_form_right = st.columns((2, 2), gap='medium')
                 global repeat_process, frame_img, tracks_process, name_id_dict
@@ -412,9 +510,8 @@ def app(selected_mode=None):
                             break
 
                         if transcode_writer is None:
-                            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-                            transcode_writer = cv2.VideoWriter(
-                                output_path, fourcc, fps_uploaded,
+                            transcode_writer = create_video_writer(
+                                output_path, fps_uploaded,
                                 (frame_uploaded.shape[1], frame_uploaded.shape[0])
                             )
 
@@ -458,43 +555,22 @@ def app(selected_mode=None):
                     if len(muti_cls) != 0:
                         # 设置加密的标签
                         track_detect.set_encryption_obj(select_id)
-                        cap = cv2.VideoCapture('data/videos/Encryoutputvideo.mp4')
-                        fps = int(cap.get(5))  # 获取视频帧率
-                        frame_status[1] = cap.get(7)
-                        videoWriter = None
                         placeholder = st.empty()
                         with st.spinner('正在处理中，请稍等...'):
                             my_bar = placeholder.progress(0)
                             try:
-                                while True:
-                                    ret, im = cap.read()
-                                    print('processing: ', frame_status[0], '/', frame_status[1])
-                                    my_bar.progress(frame_status[0] / frame_status[1])
-                                    if ret is False or im is None:
-                                        break
-
-                                    result = track_detect.feedCap(im)
-                                    image = result['frame']
-                                    frame_status[0] += 1
-
-                                    if videoWriter is None:
-                                        fourcc = cv2.VideoWriter_fourcc(
-                                            'U', '2', '6', '3')  # opencv3.0
-                                        videoWriter = cv2.VideoWriter(
-                                            'data/videos/encryption_output.mp4', fourcc, fps, (image.shape[1], image.shape[0]))
-
-                                    videoWriter.write(image)
-                                        # cv2.imshow('name', image)
-                                        # cv2.waitKey(int(1000 / fps))
-                                        #
-                                        # if cv2.getWindowProperty('name', cv2.WND_PROP_AUTOSIZE) < 1:
-                                        #     # 点x退出
-                                        #     break
-
+                                encrypted_video_path = 'data/videos/encryption_output.mp4'
+                                package_path = 'data/videos/SegEncrytion_video_package.zip'
+                                meta = encryption_video_with_(
+                                    track_detect,
+                                    select_id,
+                                    'data/videos/Encryoutputvideo.mp4',
+                                    frame_status,
+                                    output_path=encrypted_video_path
+                                )
+                                my_bar.progress(1.0)
+                                meta_path = save_video_package(encrypted_video_path, package_path, meta)
                             finally:
-                                cap.release()
-                                if videoWriter is not None:
-                                    videoWriter.release()
                                 # Streamlit/无GUI环境下调用会报 highgui not implemented
                                 try:
                                     cv2.destroyAllWindows()
@@ -505,12 +581,23 @@ def app(selected_mode=None):
                         st.video(r'data/videos/encryption_output.mp4')
 
                         with open('data/videos/encryption_output.mp4', 'rb') as file:
-                            btn = st.download_button(
+                            st.download_button(
                                 label='下载加密后的视频',
                                 data=file,
                                 file_name='SegEncrytion_video.mp4',
                                 mime="video/mp4"
                             )
+                        with open('data/videos/SegEncrytion_video_package.zip', 'rb') as file:
+                            st.download_button(
+                                label='下载可解密加密包',
+                                data=file,
+                                file_name='SegEncrytion_video_package.zip',
+                                mime="application/zip"
+                            )
+                        try:
+                            os.remove(meta_path)
+                        except OSError:
+                            pass
                         placeholder.empty()
 
 

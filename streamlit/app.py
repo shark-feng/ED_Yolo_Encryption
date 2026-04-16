@@ -105,23 +105,23 @@ if __name__ == '__main__':
     if "decrypt_mode" not in st.session_state:
         st.session_state.decrypt_mode = "图像解密"
 
-    st.sidebar.markdown("<div class='nav-brand'>🔐 智能影像安全系统</div>", unsafe_allow_html=True)
+    st.sidebar.markdown("<div class='nav-brand'>智能影像安全系统</div>", unsafe_allow_html=True)
     theme_mode = st.sidebar.selectbox("界面主题", ("跟随系统", "浅色", "深色"), index=0)
     apply_theme_override(theme_mode)
     st.sidebar.markdown("<hr class='nav-divider' />", unsafe_allow_html=True)
 
     st.sidebar.markdown("<div class='nav-section-label'>导航菜单</div>", unsafe_allow_html=True)
     st.sidebar.button(
-        "🏠 首页",
+        "首页",
         key="nav_home",
         use_container_width=True,
         on_click=_switch_home,
         type="primary" if st.session_state.active_section == "首页" else "secondary"
     )
 
-    with st.sidebar.expander("🔐 影像加密", expanded=(st.session_state.active_section == "影像加密")):
+    with st.sidebar.expander("影像加密", expanded=(st.session_state.active_section == "影像加密")):
         st.button(
-            "✍️ 自定义加密",
+            "自定义加密",
             key="nav_encrypt_custom",
             use_container_width=True,
             on_click=_switch_encrypt,
@@ -129,7 +129,7 @@ if __name__ == '__main__':
             type="primary" if (st.session_state.active_section == "影像加密" and st.session_state.encrypt_mode == "自定义加密") else "secondary"
         )
         st.button(
-            "🧩 基于实例分割加密",
+            "基于实例分割加密",
             key="nav_encrypt_segment",
             use_container_width=True,
             on_click=_switch_encrypt,
@@ -137,7 +137,7 @@ if __name__ == '__main__':
             type="primary" if (st.session_state.active_section == "影像加密" and st.session_state.encrypt_mode == "基于实例分割加密") else "secondary"
         )
         st.button(
-            "🎬 视频分割",
+            "视频分割",
             key="nav_encrypt_video",
             use_container_width=True,
             on_click=_switch_encrypt,
@@ -145,9 +145,9 @@ if __name__ == '__main__':
             type="primary" if (st.session_state.active_section == "影像加密" and st.session_state.encrypt_mode == "视频分割") else "secondary"
         )
 
-    with st.sidebar.expander("🔓 影像解密", expanded=(st.session_state.active_section == "影像解密")):
+    with st.sidebar.expander("影像解密", expanded=(st.session_state.active_section == "影像解密")):
         st.button(
-            "🖼️ 图像解密",
+            "图像解密",
             key="nav_decrypt_image",
             use_container_width=True,
             on_click=_switch_decrypt,
@@ -155,7 +155,7 @@ if __name__ == '__main__':
             type="primary" if (st.session_state.active_section == "影像解密" and st.session_state.decrypt_mode == "图像解密") else "secondary"
         )
         st.button(
-            "🎞️ 视频解密",
+            "视频解密",
             key="nav_decrypt_video",
             use_container_width=True,
             on_click=_switch_decrypt,

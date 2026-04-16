@@ -1,4 +1,5 @@
 import numpy as np
+import cv2
 
 from Encryption.noColorDecry import noColorDecry
 from Encryption.noColorEncry import noColorEncry
@@ -639,13 +640,14 @@ def RoIDecryption(fusion_image, encryption_object, key):
 # ------------ YOLOv5 -----------------
 import torch
 import torchvision
+from ultralytics import YOLO
 
 from utils.general import scale_boxes, xywh2xyxy  # , non_max_suppression
 from utils.segment.general import process_mask, scale_image
 from models.yolo import DetectMultiBackend
 
 
-def initYOLOModel(task: str = 'object'):
+def initYOLOModel(task: str = 'object', weight: str = None):
     """
     初始化YOLO模型，返回YOLOv5模型
 
@@ -654,17 +656,14 @@ def initYOLOModel(task: str = 'object'):
     输出：
         返回对应的YOLOv5模型
     """
-    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+    device = 0 if torch.cuda.is_available() else 'cpu'
     if task == 'object':
-        # YOLOv5模型
-        model = DetectMultiBackend(weights='./weights/yolov5x.pt',
-                                   data='./data/coco.yaml', device=device)
+        model = YOLO(weight or 'yolo11x.pt')
     elif task == 'segment':
-        model = DetectMultiBackend(
-            weights='./weights/yolov5x-seg.pt', device=device,
-            data='./data/coco128.yaml')
+        model = YOLO(weight or 'yolo11x-seg.pt')
     else:
-        Exception('task not exit ', task)
+        raise ValueError(f'task not exist: {task}')
+    model._device = device
     return model
 
 
@@ -679,54 +678,43 @@ def runModel(model, image, detect_type='object'):
     输出：
         返回对应图片检测的结果
     """
-    # 图片处理
-    img = letterbox(image)[0]  # padded resize
-    img = img.transpose((2, 0, 1))[::-1]  # HWC to CHW, BGR to RGB
-    img = np.ascontiguousarray(img)  # contiguous
-    img = torch.from_numpy(img).to(model.device)
-    img = img.half() if model.fp16 else img.float()  # uint8 to fp16/32
-    img /= 255  # 0 - 255 to 0.0 - 1.0
-    if len(img.shape) == 3:
-        img = img[None]  # expand for batch dim
-
-    # 执行检测
-    if detect_type == 'object':
-        pred = model(img)
-        pred = non_max_suppression(pred)
-    elif detect_type == 'segment':
-        pred, proto = model(img)[:2]
-        pred = non_max_suppression(pred, nm=32)
-    else:
-        Exception('type is error, only supposed `object` or `segment`')
-
     result = []
-    masks = None
-    # 获取检测/分割结果
-    for i, det in enumerate(pred):  # batch size
-        if det.shape[0] == 0: # 没有检测到物体
-            return result, det
-        # 获取掩码
-        if detect_type == 'segment':
-            masks = process_mask(proto[i], det[:, 6:], det[:, :4], img.shape[2:], upsample=True)  # HWC
-            masks = masks.permute(1, 2, 0).contiguous()
-            masks = masks.cpu().numpy()
-            masks = scale_image(masks.shape[:2], masks, image.shape)
-            # 将masks进行置信度过滤
-            mask_conf = 0.45
-            masks[masks >= mask_conf] = 1
-            masks[masks <= mask_conf] = 0
-            masks = masks.astype(np.uint8)
+    # 执行检测，Ultralytics会完成预处理/NMS
+    if detect_type not in ['object', 'segment']:
+        raise ValueError('type is error, only supposed `object` or `segment`')
 
-        # 将获取的包围盒缩放至图片大小
-        det[:, :4] = scale_boxes(img.shape[2:], det[:, :4], image.copy().shape).round()
-        # 获取每个对象的坐标等结果
-        for j, (*xyxy, conf, cls) in enumerate(det[:, :6]):
-            xyxy = [pos.cpu().numpy() for pos in xyxy]
-            conf = conf.cpu().numpy()
-            if masks is not None:
-                result.append([xyxy, conf, cls, cv2whc(masks[:, :, j:j + 1])])
-            else:
-                result.append([xyxy, conf, cls, None])
+    predictions = model.predict(
+        source=image,
+        conf=0.25,
+        iou=0.45,
+        verbose=False,
+        device=model._device
+    )
+    prediction = predictions[0]
+    boxes = prediction.boxes
+
+    if boxes is None or boxes.xyxy is None or boxes.xyxy.shape[0] == 0:
+        return result, torch.zeros((0, 6))
+
+    xyxy_np = boxes.xyxy.detach().cpu().numpy().astype(np.int32)
+    conf_np = boxes.conf.detach().cpu().numpy()
+    cls_np = boxes.cls.detach().cpu().numpy().astype(np.int64)
+    det = torch.from_numpy(np.column_stack((xyxy_np, conf_np, cls_np)).astype(np.float32))
+
+    masks_np = None
+    if detect_type == 'segment' and prediction.masks is not None and prediction.masks.data is not None:
+        masks_np = prediction.masks.data.detach().cpu().numpy().astype(np.uint8)  # n,h,w
+
+    for j, (xyxy, conf, cls) in enumerate(zip(xyxy_np, conf_np, cls_np)):
+        mask = None
+        if masks_np is not None and j < masks_np.shape[0]:
+            mask_hw1 = masks_np[j][:, :, None]
+            if mask_hw1.shape[:2] != image.shape[:2]:
+                mask_hw1 = cv2.resize(mask_hw1, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST)
+                if mask_hw1.ndim == 2:
+                    mask_hw1 = mask_hw1[:, :, None]
+            mask = cv2whc(mask_hw1.astype(np.uint8))
+        result.append([xyxy.tolist(), float(conf), int(cls), mask])
 
     return result, det
 

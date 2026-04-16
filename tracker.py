@@ -19,6 +19,7 @@ video_mask = []  # 用于保存目标检测获取的掩码
 def plot_bboxes(image, bboxes, mask, key, line_thickness=None, is_label=True):
     # Plots one bounding box on image img
     tl = line_thickness or round(0.002 * (image.shape[0] + image.shape[1]) / 2) + 1  # line/font thickness
+    encryption_objects = []
     for (x1, y1, x2, y2, cls_id, pos_id, detect_id) in bboxes:
         if is_label == True:
             color = (((pos_id - 128) ** 2 + 64) % 256, (255 - pos_id * 16) % 256, (pos_id * 128 + pos_id ** 2) % 256)
@@ -34,11 +35,12 @@ def plot_bboxes(image, bboxes, mask, key, line_thickness=None, is_label=True):
             if mask is not None:
                 encryption_info, image = SelectMaskEncryption(cv2whc(image), cv2whc(mask[:, :, detect_id:detect_id + 1]), key)
             else:
-                _, image = SelectAreaEncryption(cv2whc(image), [x1, y1, x2, y2], key)
+                encryption_info, image = SelectAreaEncryption(cv2whc(image), [x1, y1, x2, y2], key)
             # _, image = SelectEnncryption(cv2whc(image), [x1, y1, x2, y2], cv2whc(mask[:, :, detect_id:detect_id + 1]), key)
+            encryption_objects.extend(encryption_info)
             image = cv2whc(image)
 
-    return image
+    return image, encryption_objects
 
 
 def update_tracker(target_detector, image, frame_counter, is_label=True, label_id=None, deepsort=None):
@@ -81,6 +83,6 @@ def update_tracker(target_detector, image, frame_counter, is_label=True, label_i
             (x1, y1, x2, y2, cls_, track_id, current_detect_index)
         )
 
-    image = plot_bboxes(image, bboxes2draw, mask, text2key('1,2,3,4'), is_label=is_label)
+    image, encryption_objects = plot_bboxes(image, bboxes2draw, mask, text2key('1,2,3,4'), is_label=is_label)
 
-    return image, deepsort.tracker  # , new_faces, face_bboxes
+    return image, deepsort.tracker, encryption_objects  # , new_faces, face_bboxes
