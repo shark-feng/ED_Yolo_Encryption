@@ -6,7 +6,9 @@ import sys
 import json
 import pickle
 import shutil
+import struct
 import zipfile
+import zlib
 from pathlib import Path
 import numpy as np
 
@@ -37,6 +39,7 @@ def serialize_encryption_object(encryption_object):
                 "shape": list(mask_2d.shape),
                 "data": np.packbits(mask_2d.reshape(-1)).tobytes(),
             }
+            print(f"[SERIALIZE] Mask shape {mask_2d.shape}, non-zero count: {np.count_nonzero(mask_2d)}")
         serialized.append(item)
     return serialized
 
@@ -50,6 +53,7 @@ def deserialize_encryption_object(serialized):
             packed = np.frombuffer(item["mask"]["data"], dtype=np.uint8)
             flat = np.unpackbits(packed)[: shape[0] * shape[1]]
             mask = flat.reshape(shape[0], shape[1], 1).astype(np.uint8)
+            print(f"[DESERIALIZE] Mask shape {mask.shape}, non-zero count: {np.count_nonzero(mask)}")
         encryption_object.append([None, item["xyxy"], mask])
     return encryption_object
 
@@ -85,6 +89,9 @@ def decrypt_video_with_metadata(video_path, output_path, meta, frame_status=None
         fps = meta.get("fps", 25)
     writer = None
     frame_idx = 0
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    meta_frames = len(meta.get("frames", []))
+    print(f"[DECRYPT] Video frames: {total_frames}, Meta frames: {meta_frames}, Key: {meta.get('key')}")
     try:
         while True:
             ret, frame = cap.read()
@@ -93,14 +100,21 @@ def decrypt_video_with_metadata(video_path, output_path, meta, frame_status=None
             frame_meta = meta["frames"][frame_idx] if frame_idx < len(meta["frames"]) else []
             decryption_objects = deserialize_encryption_object(frame_meta)
             if decryption_objects:
+                print(f"[DECRYPT] Frame {frame_idx}: decrypting {len(decryption_objects)} objects")
+                for i, (_, xyxy, mask) in enumerate(decryption_objects):
+                    mask_info = "mask" if mask is not None else "bbox"
+                    print(f"  Obj {i}: {mask_info} at {xyxy}")
                 decrypted = RoIDecryption(cv2whc(frame), decryption_objects, np.array(meta["key"], dtype=np.uint8))
-                frame = PIL2whc(decrypted)
+                frame = cv2whc(decrypted)  # (W,H,C)RGB -> (H,W,C)BGR
+            else:
+                print(f"[DECRYPT] Frame {frame_idx}: no decryption objects")
             if writer is None:
                 writer = create_video_writer(output_path, fps, (frame.shape[1], frame.shape[0]))
             writer.write(frame)
             frame_idx += 1
             if frame_status is not None:
                 frame_status[0] = frame_idx
+        print(f"[DECRYPT] Processed {frame_idx} frames")
     finally:
         cap.release()
         if writer is not None:
@@ -137,15 +151,22 @@ def get_frames(frame_path, track_detect):
     cap.release()
     return image, track, key
 
-def encryption_video_with_(track_detect, label_id, frame_path, frame_status, output_path='encryption_output.mp4'):
+def encryption_video_with_(track_detect, label_id, frame_path, frame_status, output_path='encryption_output.mp4', key=None):
     """
     track_detect 为检测器
     label_id 为需要加密的id
     frame path 为视频路径
+    key 为加密密钥（numpy array，4个整数）
     """
     print('encryption video with ', frame_path)
     # 设置加密的标签
     track_detect.set_encryption_obj(label_id)
+    # 设置加密密钥
+    if key is not None:
+        track_detect.set_encryption_key(key)
+        key_list = key.tolist() if hasattr(key, 'tolist') else list(key)
+    else:
+        key_list = [1, 2, 3, 4]
 
     cap = cv2.VideoCapture(frame_path)
     fps = int(cap.get(5))  # 获取视频帧率
@@ -154,7 +175,6 @@ def encryption_video_with_(track_detect, label_id, frame_path, frame_status, out
     frame_status[1] = cap.get(7)
     videoWriter = None
     frame_metadata = []
-    key = [1, 2, 3, 4]
     try:
         while True:
             ret, im = cap.read()
@@ -165,7 +185,12 @@ def encryption_video_with_(track_detect, label_id, frame_path, frame_status, out
 
             result = track_detect.feedCap(im)
             image = result['frame']
-            frame_metadata.append(serialize_encryption_object(result.get('encryption_objects', [])))
+            enc_objs = result.get('encryption_objects', [])
+            print(f"[ENCRYPT] Frame {frame_status[0]}: serializing {len(enc_objs)} objects")
+            for i, (_, xyxy, mask) in enumerate(enc_objs):
+                mask_info = "mask" if mask is not None else "bbox"
+                print(f"  Obj {i}: {mask_info} at {xyxy}")
+            frame_metadata.append(serialize_encryption_object(enc_objs))
             frame_status[0] += 1
 
             if videoWriter is None:
@@ -189,10 +214,115 @@ def encryption_video_with_(track_detect, label_id, frame_path, frame_status, out
             cv2.destroyAllWindows()
         except cv2.error:
             pass
-    return {
+    meta = {
         "fps": fps,
         "frame_count": int(frame_status[1]),
-        "key": key,
+        "key": key_list,
         "frames": frame_metadata
     }
+    print(f"[ENCRYPT] Total frames: {meta['frame_count']}, Total meta entries: {len(meta['frames'])}")
+    return meta
+
+
+# ---------- 视频元数据嵌入/提取 ----------
+# 格式: [compressed_pickle_data][8-byte LE length][4-byte magic VED\x00]
+_VIDEO_META_MAGIC = b'VED\x00'
+
+
+def embed_video_metadata(video_path, meta):
+    """
+    将加密元数据嵌入视频文件尾部，使视频文件本身可被本系统解密。
+    格式: [压缩后的pickle数据][8字节小端长度][4字节魔数VED\x00]
+    """
+    compressed = zlib.compress(pickle.dumps(meta, protocol=pickle.HIGHEST_PROTOCOL))
+    with open(video_path, 'ab') as f:
+        f.write(compressed)
+        f.write(struct.pack('<Q', len(compressed)))
+        f.write(_VIDEO_META_MAGIC)
+    
+    # 验证嵌入的数据可以正确提取
+    extracted = extract_video_metadata(video_path)
+    if extracted is None:
+        print("[EMBED] ERROR: Failed to extract embedded metadata!")
+    elif extracted.get('key') != meta.get('key') or len(extracted.get('frames', [])) != len(meta.get('frames', [])):
+        print("[EMBED] ERROR: Extracted metadata doesn't match original!")
+        print(f"  Original key: {meta.get('key')}, Extracted key: {extracted.get('key')}")
+        print(f"  Original frames: {len(meta.get('frames', []))}, Extracted frames: {len(extracted.get('frames', []))}")
+    else:
+        print("[EMBED] SUCCESS: Metadata embedded and verified correctly")
+
+
+def extract_video_metadata(video_path):
+    """
+    从视频文件尾部提取嵌入的加密元数据。
+    返回 meta dict，若不存在或格式错误则返回 None。
+    """
+    try:
+        with open(video_path, 'rb') as f:
+            # 读取尾部魔数
+            f.seek(-4, 2)
+            magic = f.read(4)
+            if magic != _VIDEO_META_MAGIC:
+                return None
+
+            # 读取长度（魔数前8字节）
+            f.seek(-12, 2)
+            length_bytes = f.read(8)
+            compressed_len = struct.unpack('<Q', length_bytes)[0]
+
+            # 读取压缩数据
+            f.seek(-(12 + compressed_len), 2)
+            compressed = f.read(compressed_len)
+
+        return pickle.loads(zlib.decompress(compressed))
+    except Exception:
+        return None
+
+
+def has_embedded_metadata(video_path):
+    """检查视频文件是否包含嵌入的加密元数据"""
+    try:
+        with open(video_path, 'rb') as f:
+            f.seek(-4, 2)
+            return f.read(4) == _VIDEO_META_MAGIC
+    except Exception:
+        return False
+
+
+def strip_video_metadata(video_path, output_path=None):
+    """
+    从视频文件中剥离尾部嵌入的元数据，生成干净的视频副本。
+    如果视频不含嵌入元数据，则直接复制原文件。
+    返回干净视频文件的路径。
+    """
+    if output_path is None:
+        import tempfile as _tf
+        output_path = _tf.mktemp(suffix=Path(video_path).suffix, prefix='clean_')
+
+    with open(video_path, 'rb') as f:
+        # 检查是否有嵌入元数据
+        f.seek(-4, 2)
+        magic = f.read(4)
+        if magic != _VIDEO_META_MAGIC:
+            # 无嵌入元数据，直接复制
+            f.seek(0)
+            with open(output_path, 'wb') as out:
+                out.write(f.read())
+            return output_path
+
+        # 读取压缩数据长度
+        f.seek(-12, 2)
+        length_bytes = f.read(8)
+        compressed_len = struct.unpack('<Q', length_bytes)[0]
+
+        # 计算原始视频大小
+        total_size = f.seek(0, 2)
+        original_size = total_size - 12 - compressed_len
+
+        # 写入干净视频
+        f.seek(0)
+        with open(output_path, 'wb') as out:
+            out.write(f.read(original_size))
+
+    return output_path
 

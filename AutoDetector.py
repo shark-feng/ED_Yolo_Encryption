@@ -23,6 +23,7 @@ class baseDet(object):
         self.img_size = 640
         self.threshold = 0.3
         self.stride = 1
+        self.encryption_key = None
         self.load_deepsort()
 
     def load_deepsort(self):
@@ -69,7 +70,7 @@ class baseDet(object):
         self.frameCounter += 1
 
         # im, faces, face_bboxes = update_tracker(self, im, self.frameCounter)
-        im, trackers, encryption_objects = update_tracker(self, im, self.frameCounter, self.is_label, self.label_id, self.deepsort)
+        im, trackers, encryption_objects = update_tracker(self, im, self.frameCounter, self.is_label, self.label_id, self.deepsort, self.encryption_key)
 
         retDict['frame'] = im
         retDict['tracker'] = trackers
@@ -82,6 +83,9 @@ class baseDet(object):
     def set_encryption_obj(self, label_id_):
         self.is_label = False
         self.label_id = label_id_
+
+    def set_encryption_key(self, key):
+        self.encryption_key = key
 
     def init_model(self):
         raise EOFError("Undefined model type.")

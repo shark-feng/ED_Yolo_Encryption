@@ -43,7 +43,7 @@ def plot_bboxes(image, bboxes, mask, key, line_thickness=None, is_label=True):
     return image, encryption_objects
 
 
-def update_tracker(target_detector, image, frame_counter, is_label=True, label_id=None, deepsort=None):
+def update_tracker(target_detector, image, frame_counter, is_label=True, label_id=None, deepsort=None, key=None):
     # new_faces = []
 
     start = time.time()
@@ -83,6 +83,8 @@ def update_tracker(target_detector, image, frame_counter, is_label=True, label_i
             (x1, y1, x2, y2, cls_, track_id, current_detect_index)
         )
 
-    image, encryption_objects = plot_bboxes(image, bboxes2draw, mask, text2key('1,2,3,4'), is_label=is_label)
+    if key is None:
+        key = text2key('1,2,3,4')
+    image, encryption_objects = plot_bboxes(image, bboxes2draw, mask, key, is_label=is_label)
 
     return image, deepsort.tracker, encryption_objects  # , new_faces, face_bboxes

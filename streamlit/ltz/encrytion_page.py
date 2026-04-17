@@ -566,9 +566,12 @@ def app(selected_mode=None):
                                     select_id,
                                     'data/videos/Encryoutputvideo.mp4',
                                     frame_status,
-                                    output_path=encrypted_video_path
+                                    output_path=encrypted_video_path,
+                                    key=key
                                 )
                                 my_bar.progress(1.0)
+                                # 将元数据嵌入视频文件，使视频本身可被解密
+                                embed_video_metadata(encrypted_video_path, meta)
                                 meta_path = save_video_package(encrypted_video_path, package_path, meta)
                             finally:
                                 # Streamlit/无GUI环境下调用会报 highgui not implemented

@@ -1,5 +1,6 @@
 import os
 import sys
+import shutil
 
 import numpy as np
 import streamlit as st
@@ -131,15 +132,12 @@ def app(selected_mode=None):
                     pass
 
     elif option == '视频解密':
-        st.header('基于实例分割的视频加密模式')
-        # 此处将字节流处理成视频格式 具体参考
-        # https://stackoverflow.com/questions/60558412/how-to-decode-a-video-memory-file-byte-string-and-step-through-it-frame-by-f
-        # pip install imageio[ffmpeg]
+        st.header('视频解密模式')
         uploaded_file, uploaded_name = get_persisted_upload(
             uploader_key="decrypt_video_uploader",
             cache_key="decrypt_video_file_cache",
-            label="上传一个加密视频包",
-            file_types=["zip", "mp4", "avi"]
+            label="上传加密视频或加密包",
+            file_types=["mp4", "avi", "zip"]
         )
         placeholder = st.empty()
         with placeholder.container():
@@ -155,7 +153,7 @@ def app(selected_mode=None):
         if uploaded_file:
             key = st.text_input(
                 '输入视频提取码 👇 ',
-                placeholder='请输入提取码',
+                placeholder='请输入4个整数，如：22 27 68 163',
             )
             key_list = parse_key_input(key)
 
@@ -164,50 +162,81 @@ def app(selected_mode=None):
                 contact_form_left, contact_form_right = st.columns((2, 2), gap='medium')
                 with contact_form_left:
                     st.subheader('加密视频')
-                    if uploaded_name and uploaded_name.lower().endswith('.zip'):
-                        st.info('已上传可解密加密包。')
-                    else:
-                        st.warning('当前仅支持解密带元数据的加密包，建议上传 zip 加密包。')
-                #  获取选择的物体
+                    is_zip = uploaded_name and uploaded_name.lower().endswith('.zip')
+                    is_video = uploaded_name and not is_zip
+                    if is_zip:
+                        st.info('已上传可解密加密包（zip）。')
+                    elif is_video:
+                        st.info('已上传加密视频文件。')
+                    # 预览视频
+                    if is_video:
+                        upload_suffix = Path(uploaded_name or "uploaded.mp4").suffix or '.mp4'
+                        tmp_dir = tempfile.mkdtemp(prefix='decry_preview_')
+                        tmp_video = os.path.join(tmp_dir, f'encrypted{upload_suffix}')
+                        with open(tmp_video, 'wb') as f:
+                            f.write(uploaded_file.getvalue())
+                        st.video(tmp_video)
+
                 with contact_form_right:
                     st.subheader('解密后的视频')
                     if len(key_list) == 4:
-                        if not uploaded_name or not uploaded_name.lower().endswith('.zip'):
-                            st.error('请上传加密包 zip 文件进行视频解密。')
-                        else:
-                            extract_dir = tempfile.mkdtemp(prefix='video_pkg_')
-                            package_path = os.path.join(extract_dir, uploaded_name)
-                            with open(package_path, 'wb') as f:
-                                f.write(uploaded_file.getvalue())
-                            progress = st.empty()
-                            frame_status = [0, 1]
-                            try:
-                                with st.spinner('正在处理中，请稍等...'):
+                        extract_dir = None
+                        tmp_video_dir = None
+                        encrypted_video_path = None
+                        try:
+                            with st.spinner('正在处理中，请稍等...'):
+                                if is_zip:
+                                    # zip 包方式
+                                    extract_dir = tempfile.mkdtemp(prefix='video_pkg_')
+                                    package_path = os.path.join(extract_dir, uploaded_name)
+                                    with open(package_path, 'wb') as f:
+                                        f.write(uploaded_file.getvalue())
                                     encrypted_video_path, meta = load_video_package(package_path, extract_dir)
-                                    if list(meta.get('key', [])) != key_list:
-                                        st.error('提取码不正确，无法解密该视频。')
+                                else:
+                                    # mp4/avi 直接上传：从文件尾部提取嵌入的元数据
+                                    upload_suffix = Path(uploaded_name or "uploaded.mp4").suffix or '.mp4'
+                                    tmp_video_dir = tempfile.mkdtemp(prefix='decry_video_')
+                                    tmp_video_path = os.path.join(tmp_video_dir, f'encrypted{upload_suffix}')
+                                    with open(tmp_video_path, 'wb') as f:
+                                        f.write(uploaded_file.getvalue())
+                                    meta = extract_video_metadata(tmp_video_path)
+                                    if meta is None:
+                                        st.error('该视频文件不包含解密元数据，无法解密。请确认视频由本系统加密生成。')
                                         return
-                                    frame_status[1] = max(meta.get('frame_count', 1), 1)
+                                    # 剥离尾部元数据，生成干净视频用于解密读取
+                                    clean_video_path = os.path.join(tmp_video_dir, f'clean{upload_suffix}')
+                                    encrypted_video_path = strip_video_metadata(tmp_video_path, clean_video_path)
+
+                                # 验证提取码
+                                if list(meta.get('key', [])) != key_list:
+                                    st.error('提取码不正确，无法解密该视频。')
+                                else:
+                                    frame_status = [0, max(meta.get('frame_count', 1), 1)]
                                     output_path = 'data/videos/decryption_output.mp4'
+                                    progress = st.empty()
                                     progress_bar = progress.progress(0)
                                     decrypt_video_with_metadata(encrypted_video_path, output_path, meta, frame_status)
                                     progress_bar.progress(1.0)
-                                st.success('已完成，请点击按钮下载!')
-                                progress.empty()
-                                st.video(output_path)
-                                with open(output_path, 'rb') as file:
-                                    st.download_button(
-                                        label='下载解密后的视频',
-                                        data=file,
-                                        file_name='Decryption_video.mp4',
-                                        mime="video/mp4"
-                                    )
-                            finally:
-                                try:
-                                    import shutil
-                                    shutil.rmtree(extract_dir, ignore_errors=True)
-                                except OSError:
-                                    pass
+                                    progress.empty()
+                                    st.success('已完成，请点击按钮下载!')
+                                    st.video(output_path)
+                                    with open(output_path, 'rb') as file:
+                                        st.download_button(
+                                            label='下载解密后的视频',
+                                            data=file,
+                                            file_name='Decryption_video.mp4',
+                                            mime="video/mp4"
+                                        )
+                        finally:
+                            # 清理临时目录
+                            for d in [extract_dir, tmp_video_dir]:
+                                if d and os.path.isdir(d):
+                                    try:
+                                        shutil.rmtree(d, ignore_errors=True)
+                                    except OSError:
+                                        pass
+                    elif len(key_list) > 0:
+                        st.warning('提取码应包含 4 个整数，例如：22 27 68 163')
 
 
 
