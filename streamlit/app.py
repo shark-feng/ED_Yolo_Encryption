@@ -60,18 +60,18 @@ def apply_theme_override(mode: str):
             """
             <style>
             :root {
-              --app-bg: #0f1726;
-              --card-bg: #172136;
-              --text-primary: #edf3ff;
-              --text-secondary: #a5b5ce;
-              --brand-1: #5b8dff;
-              --brand-2: #3ad4c7;
-              --border-soft: rgba(156, 179, 214, 0.26);
-              --sidebar-bg: #0f1a2f;
-              --sidebar-item-bg: #162844;
-              --sidebar-item-hover: #1f3558;
-              --sidebar-item-active: #2b4f82;
-              --sidebar-text: #d8e5ff;
+              --app-bg: #f5f7fb;
+              --card-bg: #ffffff;
+              --text-primary: #18212f;
+              --text-secondary: #5f6f85;
+              --brand-1: #3c79ef;
+              --brand-2: #35c6be;
+              --border-soft: rgba(26, 39, 68, 0.10);
+              --sidebar-bg: #f6f9ff;
+              --sidebar-item-bg: #ffffff;
+              --sidebar-item-hover: #edf3ff;
+              --sidebar-item-active: #dbe9ff;
+              --sidebar-text: #23324d;
             }
             </style>
             """,
